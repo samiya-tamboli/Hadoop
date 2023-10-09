@@ -1,0 +1,328 @@
+________________________________________________________________________________________________
+
+
+------------------------------------------Hadoop3 multinode legitimate cluster---------------------------------------------------
+
+
+*********Connect To the DataCenter with Public Key*********
+
+ssh -i Key.pem ubuntu@public_dns_address
+
+# Copy public key on to the DataCenter main server #
+
+scp -i Key.pem Key.pem ubuntu@ip:~/.ssh
+pscp -i  Key.ppk Key.pem ubuntu@public_ip:/home/ubuntu/.ssh
+
+******************Take Control***********************
+
+sudo -i
+passwd
+exit
+
+******************Regular 5 Steps**********************
+
+sudo apt update 
+wget https://archive.apache.org/dist/hadoop/common/hadoop-3.1.2/hadoop-3.1.2.tar.gz
+sudo tar -zxf ~/hadoop-* -C /usr/local
+sudo mv /usr/local/hadoop-* /usr/local/hadoop
+
+******************Configure Bashrc******************
+
+cat >>$HOME/.bashrc <<EOL  
+# -- HADOOP ENVIRONMENT VARIABLES START -- #
+export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export HADOOP_HOME=/usr/local/hadoop
+export PATH=\$PATH:\$HADOOP_HOME/bin
+export PATH=\$PATH:\$HADOOP_HOME/sbin
+export HADOOP_MAPRED_HOME=\$HADOOP_HOME
+export HADOOP_COMMON_HOME=\$HADOOP_HOME
+export HADOOP_HDFS_HOME=\$HADOOP_HOME
+export YARN_HOME=\$HADOOP_HOME
+export HADOOP_CONF_DIR=/usr/local/hadoop/etc/hadoop
+export PDSH_RCMD_TYPE=ssh
+# -- HADOOP ENVIRONMENT VARIABLES END -- #
+EOL
+
+bash
+
+****************Configuration of hadoop env******************
+
+sudo mkdir /var/log/hadoop/
+sudo chown -R ubuntu:ubuntu /usr/local/hadoop
+sudo su -c 'echo export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64 >> /usr/local/hadoop/etc/hadoop/hadoop-env.sh'
+sudo su -c 'echo export HADOOP_LOG_DIR=/var/log/hadoop/ >> /usr/local/hadoop/etc/hadoop/hadoop-env.sh'
+sudo chown ubuntu:ubuntu -R /var/log/hadoop
+
+****************Configuration of core-site.xml******************
+
+sudo sed -i '/<configuration>/,/<\/configuration>/d' /usr/local/hadoop/etc/hadoop/core-site.xml
+sudo su -c 'cat >> /usr/local/hadoop/etc/hadoop/core-site.xml <<EOL
+<configuration>
+  <property>
+    <name>fs.defaultFS</name>
+    <value>hdfs://nn:9000</value>
+  </property>
+<property>
+<name>hadoop.tmp.dir</name>
+<value>/usr/local/hadoop/tmp</value>
+</property>
+</configuration>
+EOL'
+
+****************Configuration of hdfs-site.xml******************
+
+mkdir -p /usr/local/hadoop/tmp/dfs/data/namenode 
+mkdir /usr/local/hadoop/tmp/dfs/data/datanode 
+sudo sed -i '/<configuration>/,/<\/configuration>/d' /usr/local/hadoop/etc/hadoop/hdfs-site.xml
+sudo su -c 'cat >>/usr/local/hadoop/etc/hadoop/hdfs-site.xml <<EOL
+<configuration>
+  <property>
+    <name>dfs.replication</name>
+    <value>3</value>
+  </property>
+  <property>
+    <name>dfs.namenode.name.dir</name>
+    <value>/usr/local/hadoop/tmp/dfs/data/namenode</value>
+  </property>
+ <property>
+    <name>dfs.datanode.data.dir</name>
+    <value>/usr/local/hadoop/tmp/dfs/data/datanode</value>
+  </property>
+<property> 
+   <name>dfs.secondary.http.address</name>
+   <value>snn:9868</value>
+   <description>SecondaryNameNodeHostname</description>
+</property>
+</configuration>
+EOL'
+
+****************Configuration of yarn-site.xml******************
+
+sudo sed -i '/<configuration>/,/<\/configuration>/d' /usr/local/hadoop/etc/hadoop/yarn-site.xml
+sudo su -c 'cat >>/usr/local/hadoop/etc/hadoop/yarn-site.xml <<EOL
+<configuration>
+<property>
+<name>yarn.nodemanager.aux-services</name>
+<value>mapreduce_shuffle</value>
+</property>
+<property>
+<name>yarn.resourcemanager.hostname</name>
+<value>rm</value>
+</property>
+<property>
+<name>yarn.resourcemanager.address</name>
+<value>rm:8032</value>
+</property>
+<property>
+<name>yarn.nodemanager.env-whitelist</name>
+<value>JAVA_HOME,HADOOP_COMMON_HOME,HADOOP_HDFS_HOME,HADOOP_CONF_DIR,CLASSPATH_PREPEND_DISTCACHE,HADOOP_YARN_HOME,HADOOP_HOME,PATH,LAN$</value>
+</property>
+</configuration>
+EOL'
+
+****************Configuration of mapred-site.xml******************
+
+sudo sed -i '/<configuration>/,/<\/configuration>/d' /usr/local/hadoop/etc/hadoop/mapred-site.xml
+sudo su -c 'cat >>/usr/local/hadoop/etc/hadoop/mapred-site.xml <<EOL
+<configuration>
+<property>
+<name>mapreduce.framework.name</name>
+<value>yarn</value>
+</property>
+<property>
+<name>mapreduce.application.classpath</name>
+<value>/usr/local/hadoop/share/hadoop/mapreduce/*:/usr/local/hadoop/share/hadoop/mapreduce/lib/*</value>
+</property>
+</configuration>
+EOL'
+
+***********************Prerequisites****************************
+
+Disable SELINUX-----------------------------------------------------------------------------------
+
+sudo apt-get install selinux-utils 
+setenforce 0
+getenforce
+
+Disable ipv6-----------------------------------------------------------------------------------
+
+cat /proc/sys/net/ipv6/conf/all/disable_ipv6
+sudo su -c 'cat >>/etc/sysctl.conf <<EOL
+net.ipv6.conf.all.disable_ipv6 =1
+net.ipv6.conf.default.disable_ipv6 =1
+net.ipv6.conf.lo.disable_ipv6 =1
+vm.swappiness=1
+EOL'
+sudo sysctl -p
+
+Disable FireWall iptables-----------------------------------------------------------------------------------
+
+sudo iptables -L -n -v 
+sudo iptables-save > firewall.rules 
+sudo ufw status verbose 
+
+Disable THP -----------------------------------------------------------------------------------
+
+cat /sys/kernel/mm/transparent_hugepage/defrag
+sudo su -c 'cat >>/etc/rc.local <<EOL
+if test -f /sys/kernel/mm/transparent_hugepage/enabled; then
+  echo never > /sys/kernel/mm/transparent_hugepage/enabled
+fi
+if test -f /sys/kernel/mm/transparent_hugepage/defrag; then
+   echo never > /sys/kernel/mm/transparent_hugepage/defrag 
+fi
+exit 0
+EOL'
+sudo -i
+source /etc/rc.local
+
+Set Swappiness-----------------------------------------------------------------------------------
+
+sudo sysctl -a | grep vm.swappiness
+sudo su -c 'cat >>/etc/sysctl.conf <<EOL
+'vm.swappiness=1'
+EOL'
+sudo sysctl -p
+
+Configure NTP-----------------------------------------------------------------------------------
+
+sudo yum install ntp -y
+sudo timedatectl set-timezone Asia/Kolkata
+
+Root Reserved Space-----------------------------------------------------------------------------------
+
+sudo tune2fs -m 0 /dev/nvme0n1p1
+sudo tune2fs -l /dev/nvme0n1p1 | grep "Reserved block count"
+
+SSH Password less logins-----------------------------------------------------------------------------------
+
+nano .profile
+eval `ssh-agent` ssh-add /home/centos/.ssh/Powershell.pem
+source .profile
+
+StrictHostKeyChecking no-----------------------------------------------------------------------------------
+
+sudo nano /etc/ssh/ssh_config
+---( Uncomment-> StrictHostKeyChecking no)--- 
+                                        ---or---
+    
+nano /.ssh/config
+Host *
+StrictHostKeyChecking no
+UserKnownHostsFile=/dev/null
+sudo service ssh restart
+
+***********************Update & AMI****************************
+
+sudo apt-get update 
+Make Image after this and launch multiple instances
+
+*************************Configure Local DNS*****************************
+
+#update /etc/hosts on NN
+sudo su -c 'cat>>/etc/hosts<<EOL
+172.31.31.161 nn
+172.31.25.227 snn
+172.31.16.196 rm
+172.31.23.58 1dn
+172.31.28.113 2dn
+172.31.25.64 3dn
+EOL'
+
+# Configure pdsh
+sudo apt-get install pdsh -y
+sudo su -c 'cat>>/etc/genders<<EOL
+nn
+snn
+rm
+1dn
+2dn
+3dn
+EOL'
+
+# Configure dsh
+sudo apt install dsh -y
+sudo nano /etc/dsh/machines.list
+nn
+rm
+snn
+1dn
+2dn
+3dn
+
+pdsh/dsh -a sudo apt update -y
+
+pdsh -x nn -a exec sudo chown ubuntu:ubuntu /etc/hosts
+pdsh -x nn -a exec 'cat>>/etc/hosts<<EOL
+172.31.31.161 nn
+172.31.25.227 snn
+172.31.16.196 rm
+172.31.23.58 1dn
+172.31.28.113 2dn
+172.31.25.64 3dn
+EOL'
+pdsh -x nn -a exec sudo chown root:root /etc/hosts
+
+*************************Change hostname*****************************
+
+sudo hostname nn
+--(rm,snn,1dn,2dn,3dn)--
+
+***********************Workers on NN****************************
+
+cat>>$HADOOP_CONF_DIR/workers <<EOL
+1dn
+2dn
+3dn
+EOL'
+
+***********************Install Java****************************
+
+pdsh -a sudo apt install openjdk-8-jdk-headless -y
+
+*************************Format name node*****************************
+
+hdfs namenode -format -y
+
+*************************Start the cluster*****************************
+
+start-all.sh
+---(or)----
+start-dfs.sh
+ssh rm
+start-yarn.sh
+$HADOOP_HOME/sbin/mr-jobhistory-daemon.sh start historyserver
+dsh/pdsh -a jps | sort
+
+(If Error starting Datanodes check configuration hdfs-site.xml on DN, or 
+/usr/local/hadoop/tmp/dfs/data/datanode current already exist remove that and start)
+
+*************************WEB UI HTTP PORTS*****************************
+
+# NameNode 
+nn_public_ip:9870
+
+# ResourceManager 
+rm_public_ip:8088
+
+# MapReduce JobHistory Server 
+rm_public_ip:19888
+
+# SecondaryNameNode 
+nn_public_ip:9868
+
+# DataNode
+dn_public_ip:9864
+
+
+------------------------------------------------------Benchmarking---------------------------------------------------
+
+hdfs dfs -mkdir /user
+hdfs dfs -mkdir /user/ubuntu
+hadoop jar /usr/local/hadoop/share/hadoop/mapreduce/hadoop-mapreduce-examples-3.1.2.jar teragen 50 random-data
+hadoop jar /usr/local/hadoop/share/hadoop/mapreduce/hadoop-mapreduce-examples-*.jar terasort random-data sorted-data
+hadoop jar /usr/local/hadoop/share/hadoop/mapreduce/hadoop-mapreduce-*-tests.jar TestDFSIO -write -nrFiles 10 -fileSize 5MB
+hadoop jar /usr/local/hadoop/share/hadoop/mapreduce/hadoop-mapreduce-*-tests.jar TestDFSIO -read -nrFiles 10 -fileSize 5MB
+
+
+________________________________________________________________________________________________
